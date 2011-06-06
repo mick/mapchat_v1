@@ -1,0 +1,23 @@
+<html>
+  <head>
+    <title>Map Chat</title>
+    <script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/1.5.2/jquery.min.js"></script>
+    <script type="text/javascript" src="/socket.io/socket.io.js"></script>
+    <script type="text/javascript" src="http://maps.google.com/maps/api/js?sensor=true"></script>
+    <script type="text/javascript" src="/client.js"></script>
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+  </head>
+  <body>
+
+    <div id="chatoverlaytop">
+      <p>Map Chat</p>
+    </div>
+    <div id="chatoverlaybottom">
+      <textarea id="message"></textarea>
+      <input type="submit" id="send" value="send" />
+    </div>
+    
+    <div id="map"></div>    
+    <!--<div class="chatmsg">Test message</div>-->
+  </body>
+</html>
