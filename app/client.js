@@ -1,4 +1,4 @@
-var socket = new io.Socket("localhost");
+var socket = new io.Socket("mapchat.im");
 var map = null;
 socket.connect();
 socket.on('connect', function(data){ console.log(data); });
