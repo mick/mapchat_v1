@@ -1,6 +1,15 @@
 
 
-This is a simple project to show the power of couchdb and NodeJS in handling Geo Data.
+This is a simple project to show the power of CouchDB and Node.js for handling Geo Data.
 
 
-In this chat app you all your messages are tied to a location. 
+Users are shown a map and chatbox. Any chat message they add is added to the map at the 
+location the map is centered on.  Other users can see the map update in real-time.
+
+==== REQUIRES
+
+ - expressjs
+ - cradle
+ - simplegeo (both the libraary and a simplegeo api key)
+ - geojs (a simple geospatial lib for node)
+ - CouchDB (or hosting with iris couch) Needs to include geocouch.

@@ -1,12 +1,18 @@
-HOST = null; // localhost
-PORT = 8012;
-
-var fu = require("./fu"),
+var express = require("express"),
+    app = express.createServer(),
+    cradle = require("cradle"),
     sys = require("sys"),
-    url = require("url"),
-    qs = require("querystring"),
-    geojs = require("../geojs");
+    geojs = require("geojs"),
+    io = require("socket.io"),
+    settings = require("./settings"),
+    SimpleGeo = require("simplegeo-client").SimpleGeo;
 
+var connection = new(cradle.Connection)(settings.COUCHDB_HOST, settings.COUCHDB_PORT, 
+                                        {auth: settings.COUCHDB_AUTH});
+var db = connection.database(settings.COUCHDB_DATABASE);
+
+var sg = new SimpleGeo(settings.SIMPLEGEO_KEY,
+                       settings.SIMPLEGEO_SECRET);
 
 // keep subscriptions.
 //   subscriptions have bounding boxes.
@@ -18,18 +24,7 @@ var subscriptions =  [];
 // callback:<function> or subscription id in socket?
 // messages: [<>] might no be needed if socket io does this form me.
 
-
-
-//On message: check if it is with anyone bounding box (if so send it to them)
-//save it to couchDB, add to message list, and flush message list to calc clustering.
-
-
-
-fu.listen(Number(process.env.PORT || PORT), HOST);
-                
-
-
-socket = fu.socketio()
+socket = io.listen(app);
 
 socket.on('connection', function(client){ 
         sys.puts("new client connect");
@@ -44,28 +39,19 @@ socket.on('connection', function(client){
         client.on('disconnect', function(){ sys.puts("client disconnect"); }) 
     }); 
 
-fu.get("/", fu.staticHandler("index.html"));
-fu.get("/style.css", fu.staticHandler("style.css"));
-fu.get("/client.js", fu.staticHandler("client.js"));
-fu.get("/jquery-1.2.6.min.js", fu.staticHandler("jquery-1.2.6.min.js"));
-
-
-
+app.get('/', function(req, res){                
+        res.render('index.ejs', { layout: false});
+    });
+app.use('/static', express.static(__dirname + '/static')); 
 
 
 mapchat = {
     subscriptions: [],
     subscribe:function(client, msg){
 
-        //does socket it handle client to server json?
-
-
-        bottomlat = msg.bounds[1][0];
-        bottomlon = msg.bounds[1][1];
-
-        toplatlng = new geojs.latLng(msg.bounds[0][0], msg.bounds[0][1]);
-        bottomlatlng = new geojs.latLng(msg.bounds[1][0], msg.bounds[1][1]);
-        bounds = new geojs.bounds(toplatlng, bottomlatlng);
+        bottomlatlng = new geojs.latLng(msg.bounds[0][1], msg.bounds[0][0]);
+        toplatlng = new geojs.latLng(msg.bounds[1][1], msg.bounds[1][0]);
+        bounds = new geojs.bounds(bottomlatlng, toplatlng);
         
         var allReadySubscribed = false;
         for(s in mapchat.subscriptions){
@@ -74,18 +60,35 @@ mapchat = {
 
                 //Set new bounds.
                 mapchat.subscriptions[s].bounds = bounds
-                sys.puts("new bounds set");
                 break;                
             }
         }
         if(!allReadySubscribed){
             mapchat.subscriptions.push({client:client,
                                         bounds:bounds});
-            sys.puts("client with bounds added.");
+            mapchat.sendChatClusters(client);
         }
+        bbox = bounds.toBoundsArray().join(",");
+        db.spatial("geo/recentPoints", {"bbox":bbox},
+            function(er, docs) {
+                if(er){sys.puts("Error: "+sys.inspect(er)); return;}
+                for(d in docs){
+                    client.send({"type":"message", 
+                                "geometry":docs[d].geometry, 
+                                "date":docs[d].value.date,
+                                "message":docs[d].value.message});
+                }
+
+            });
 
     },
     message: function(client, msg){
+
+        // save message to the database
+        msg.date = new Date();
+        db.save(msg, function (err, res) {
+                if(err){sys.puts("error: "+sys.inspect(err));}
+            });
 
         for(s in mapchat.subscriptions){            
             sub = mapchat.subscriptions[s];
@@ -94,15 +97,78 @@ mapchat = {
             if(sub.client.sessionId != client.sessionId){
 
                 //check see if the bounds match.
-                point = new geojs.point(new geojs.latLng(msg.point[0], msg.point[1]));
+                point = new geojs.point(msg.geometry);
                 if(sub.bounds.contains(point)){
-                    sub.client.send({"type":"message", "point":msg.point, "message":msg.message});
+                    sub.client.send({"type":"message", "geometry":msg.geometry, "message":msg.message});
                 }else{
                     sys.puts("not in the box")
                 }
             }
         }
 
-    }
+    },
+    sendChatClusters: function(client){   
+        if(client != undefined){
+            // Send to just the one client
+            client.send({"type":"clusters", "clusters":mapchat.clusters});
+        }else{
+            // Send to all subscriptions
+            for(s in mapchat.subscriptions){
+                sub = mapchat.subscriptions[s];
+                sub.client.send({"type":"clusters", "clusters":mapchat.clusters});
+            }
+        }
+    },
+    getChatClusters: function(){
+        db.spatiallist("geo/proximity-clustering/recentPoints", {"bbox":"-180,-90,180,90", 
+                                                                 "sort":"true",
+                                                                 "limit":"5",
+                                                                 "nopoints":"true"},
+            function(er, docs) {
+                if(er){sys.puts("Error: "+sys.inspect(er));return;}
 
+                var doneFetchingContext = function(docswithcontext){
+                    mapchat.clusters = docswithcontext;
+                    mapchat.sendChatClusters();
+                    setTimeout(mapchat.getChatClusters, (1000*600));
+                }
+                count = docs.length;
+                for(d in docs){
+                    (function(doc){
+                        sg.getContextByLatLng(docs[d].center.coordinates[1], 
+                                              docs[d].center.coordinates[0], 
+                                              function(error,data,res){
+                            var city = "",
+                                state = "",
+                                country = "";
+                            for(f in data.features){
+                                if(data.features[f].classifiers[0].category == "National"){
+                                    country = data.features[f].name.replace("United States of America", "USA");
+                                }else if(data.features[f].classifiers[0].category == "Subnational"){
+                                    state = data.features[f].name;
+                                }else if(data.features[f].classifiers[0].category == "Municipal"){
+                                    city = data.features[f].name;
+                                }else if(data.features[f].classifiers[0].category == "Urban Area"){
+                                    city = data.features[f].name;
+                                }
+                            }
+                            names = [];
+                            if(city != ""){ names.push(city);}
+                            if(state != ""){ names.push(state);}
+                            if(country != ""){ names.push(country);}
+                            doc.locationName = names.join(", ");
+                            count--;
+                            if(count === 0){doneFetchingContext(docs)};
+                        });})(docs[d]);
+
+                }
+
+
+            });
+    }
 };
+
+mapchat.getChatClusters();
+
+
+app.listen(settings.PORT);
