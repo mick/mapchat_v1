@@ -1,5 +1,4 @@
-//var socket = new io.Socket("mapchat.im");
-var socket = new io.Socket("localhost");
+var socket = new io.Socket();
 var map = null;
 var chatboxes = [];
 socket.connect();
